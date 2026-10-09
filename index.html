@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenAgriMap France | OpenStreetMap pour l'Agriculture & Vigilance Écologique</title>
+  <meta name="description" content="Plateforme collaborative de cartographie agricole en France : couches de sol (pH, texture), biodiversité, parcelles RPG et alertes sanitaires participatives (mildiou, rouille).">
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Turf.js for Geospatial calculations -->
+  <script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- App Styles -->
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+  <!-- Top Navigation Bar -->
+  <header class="app-header">
+    <div class="brand-section">
+      <div class="logo-mark">
+        <i data-lucide="sprout"></i>
+      </div>
+      <div>
+        <h1 class="brand-title">OpenAgriMap <span class="badge-fr">France 🇫🇷</span></h1>
+        <p class="brand-subtitle">Cartographie collaborative agricole & vigilance bioclimatique</p>
+      </div>
+    </div>
+
+    <!-- Live Commune / Parcel Search -->
+    <div class="search-bar-container">
+      <div class="search-input-wrapper">
+        <i data-lucide="search" class="search-icon"></i>
+        <input type="text" id="communeSearchInput" placeholder="Rechercher une commune, parcelle ou lieu (ex: Angers, Chinon, Reims)..." autocomplete="off" />
+        <button id="clearSearchBtn" class="clear-search-btn" title="Effacer"><i data-lucide="x"></i></button>
+      </div>
+      <div id="searchResultsDropdown" class="search-dropdown hidden"></div>
+    </div>
+
+    <!-- Quick Actions Header -->
+    <div class="header-actions">
+      <button id="openReportModalBtn" class="btn btn-warning pulse-glow" title="Signaler une maladie ou un ravageur">
+        <i data-lucide="alert-triangle"></i>
+        <span>Signaler une alerte</span>
+      </button>
+
+      <button id="openSourcesModalBtn" class="btn btn-glass" title="Consulter les sources Open Data officielles">
+        <i data-lucide="database"></i>
+        <span>Sources Open Data</span>
+      </button>
+
+      <button id="liveInspectSoilToggle" class="btn btn-emerald-outline" title="Cliquer sur la carte pour sonder le sol via SoilGrids API">
+        <i data-lucide="crosshair"></i>
+        <span id="inspectModeLabel">Sondeur de Sol : OFF</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Workspace Layout -->
+  <div class="app-container">
+    
+    <!-- Left Sidebar: Layer Controls & Vigilance Feed -->
+    <aside class="sidebar" id="mainSidebar">
+      
+      <!-- Primary Alert Banner (Dynamic Proximity Alert) -->
+      <section class="alert-banner-card" id="proximityAlertCard">
+        <div class="alert-header">
+          <div class="alert-pulse-icon">
+            <i data-lucide="shield-alert"></i>
+          </div>
+          <div>
+            <div class="alert-tag">VIGILANCE BIOCLIMATIQUE EN DIRECT</div>
+            <h2 class="alert-headline" id="mainAlertHeadline">
+              Le mildiou a été signalé par <span class="highlight-count">17 jardiniers</span> dans un rayon de <span class="highlight-dist">30 km</span>.
+            </h2>
+          </div>
+        </div>
+
+        <p class="alert-description" id="mainAlertDetails">
+          Risque élevé sur solanacées (tomates, pommes de terre). Forte hygrométrie et températures douces observées dans votre zone.
+        </p>
+
+        <!-- Radius Adjustment Slider -->
+        <div class="radius-control-box">
+          <div class="radius-header">
+            <span>Rayon de surveillance :</span>
+            <strong id="radiusValueLabel">30 km</strong>
+          </div>
+          <input type="range" id="alertRadiusSlider" min="5" max="80" step="5" value="30" class="styled-slider" />
+          <div class="radius-ticks">
+            <span>5 km</span>
+            <span>15 km</span>
+            <span>30 km</span>
+            <span>50 km</span>
+            <span>80 km</span>
+          </div>
+        </div>
+
+        <div class="alert-stats-strip">
+          <div class="stat-pill">
+            <span class="stat-num" id="activeMildewCount">17</span>
+            <span class="stat-label">Mildiou</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-num" id="activeRustCount">9</span>
+            <span class="stat-label">Rouille</span>
+          </div>
+          <div class="stat-pill">
+            <span class="stat-num" id="activePestCount">14</span>
+            <span class="stat-label">Ravageurs</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Layer Control Section -->
+      <section class="layers-manager-section">
+        <div class="section-title-row">
+          <h3><i data-lucide="layers"></i> Couches thématiques Open Data</h3>
+          <span class="badge-count" id="activeLayersCount">3 actives</span>
+        </div>
+
+        <!-- 1. BIODIVERSITY LAYER -->
+        <div class="layer-group-card" id="bioGroupCard">
+          <div class="layer-group-header">
+            <label class="switch-container">
+              <input type="checkbox" id="toggleBioLayer" checked />
+              <span class="switch-slider"></span>
+            </label>
+            <div class="layer-meta">
+              <div class="layer-title-row">
+                <span class="layer-name">🐝 Couche Biodiversité & Auxiliaires</span>
+                <span class="source-tag">GBIF / INPN MNHN</span>
+              </div>
+              <p class="layer-desc">Oiseaux régulateurs, pollinisateurs sauvages et insectes bénéfiques.</p>
+            </div>
+          </div>
+
+          <div class="layer-sub-options" id="bioSubOptions">
+            <div class="filter-chips">
+              <button class="chip active" data-bio-filter="all">Tous</button>
+              <button class="chip" data-bio-filter="birds">🦅 Oiseaux</button>
+              <button class="chip" data-bio-filter="pollinators">🐝 Pollinisateurs</button>
+              <button class="chip" data-bio-filter="insects">🐞 Auxiliaires</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. CROP LAYER -->
+        <div class="layer-group-card" id="cropGroupCard">
+          <div class="layer-group-header">
+            <label class="switch-container">
+              <input type="checkbox" id="toggleCropLayer" checked />
+              <span class="switch-slider"></span>
+            </label>
+            <div class="layer-meta">
+              <div class="layer-title-row">
+                <span class="layer-name">🌾 Couche Cultures & Parcelles (RPG)</span>
+                <span class="source-tag">IGN Géoplateforme / ASP</span>
+              </div>
+              <p class="layer-desc">Historique d'assolement, rotations culturales et variétés GEVES.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. DISEASE & PEST LAYER -->
+        <div class="layer-group-card" id="diseaseGroupCard">
+          <div class="layer-group-header">
+            <label class="switch-container">
+              <input type="checkbox" id="toggleDiseaseLayer" checked />
+              <span class="switch-slider"></span>
+            </label>
+            <div class="layer-meta">
+              <div class="layer-title-row">
+                <span class="layer-name">🦠 Vigilance Sanitaire & Épidémies</span>
+                <span class="source-tag">BSV & Communauté OSM</span>
+              </div>
+              <p class="layer-desc">Signalements citoyens de mildiou, rouille et bioagresseurs.</p>
+            </div>
+          </div>
+
+          <div class="layer-sub-options" id="diseaseSubOptions">
+            <div class="checkbox-row">
+              <label><input type="checkbox" id="filterMildew" checked> 🍄 Mildiou</label>
+              <label><input type="checkbox" id="filterRust" checked> 🍂 Rouille</label>
+              <label><input type="checkbox" id="filterPests" checked> 🪲 Ravageurs</label>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- Community Recent Reports Stream -->
+      <section class="recent-reports-section">
+        <div class="section-title-row">
+          <h3><i data-lucide="radio"></i> Derniers signalements citoyens</h3>
+          <span class="live-dot" title="Flux temps réel actif"></span>
+        </div>
+        <div class="reports-feed" id="reportsFeedContainer">
+          <!-- Dynamically populated -->
+        </div>
+      </section>
+
+    </aside>
+
+    <!-- Map Viewport -->
+    <main class="map-wrapper">
+      <div id="map"></div>
+
+      <!-- Soil Inspector Floating Toast / Overlay -->
+      <div id="soilInspectorPanel" class="soil-inspector-overlay hidden">
+        <div class="panel-header">
+          <div class="panel-title-group">
+            <i data-lucide="microscope"></i>
+            <div>
+              <h4>Analyse Pédologique Instantanée</h4>
+              <span id="inspectorCoordsLabel">Lat: --, Lon: --</span>
+            </div>
+          </div>
+          <button id="closeInspectorBtn" class="close-panel-btn"><i data-lucide="x"></i></button>
+        </div>
+
+        <div id="inspectorLoadingState" class="inspector-loading hidden">
+          <div class="spinner"></div>
+          <span>Interrogation du service ISRIC SoilGrids REST API...</span>
+        </div>
+
+        <div id="inspectorContentState" class="inspector-body">
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <span class="metric-label">pH (H₂O)</span>
+              <span class="metric-val" id="soilPhVal">--</span>
+              <span class="metric-sub" id="soilPhStatus">--</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Texture Sol</span>
+              <span class="metric-val" id="soilTextureVal">--</span>
+              <span class="metric-sub" id="soilTextureDetail">--</span>
+            </div>
+            <div class="metric-card">
+              <span class="metric-label">Capacité Drainage</span>
+              <span class="metric-val" id="soilDrainageVal">--</span>
+              <span class="metric-sub" id="soilDrainageDetail">--</span>
+            </div>
+          </div>
+
+          <!-- Soil Granulometry Progress Bars -->
+          <div class="granulo-box">
+            <div class="granulo-row">
+              <span>Argile (<span id="clayPct">--%</span>)</span>
+              <div class="progress-track"><div id="clayBar" class="progress-fill fill-clay" style="width: 0%"></div></div>
+            </div>
+            <div class="granulo-row">
+              <span>Limon (<span id="siltPct">--%</span>)</span>
+              <div class="progress-track"><div id="siltBar" class="progress-fill fill-silt" style="width: 0%"></div></div>
+            </div>
+            <div class="granulo-row">
+              <span>Sable (<span id="sandPct">--%</span>)</span>
+              <div class="progress-track"><div id="sandBar" class="progress-fill fill-sand" style="width: 0%"></div></div>
+            </div>
+          </div>
+
+          <div class="soil-agri-recommendation" id="soilAgriRec">
+            <i data-lucide="lightbulb"></i>
+            <span id="soilRecText">Cliquez sur une parcelle agricole pour calculer les conseils d'implantation.</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Basemap Switcher Widget (100% Free & Open Source) -->
+      <div class="basemap-selector-widget">
+        <button class="basemap-btn active" data-basemap="osmfr" title="OpenStreetMap France - Rendu français officiel">
+          <i data-lucide="map"></i> OSM France 🇫🇷
+        </button>
+        <button class="basemap-btn" data-basemap="opentopo" title="OpenTopoMap - Courbes de niveau & relief agricole">
+          <i data-lucide="mountain"></i> Topo & Relief
+        </button>
+        <button class="basemap-btn" data-basemap="ign" title="IGN Géoplateforme - Orthophoto Satellite France">
+          <i data-lucide="satellite"></i> Ortho IGN
+        </button>
+        <button class="basemap-btn" data-basemap="osm" title="OpenStreetMap Standard Mondial">
+          <i data-lucide="compass"></i> OSM Standard
+        </button>
+      </div>
+
+      <!-- Map Legend Bar -->
+      <div class="map-legend-bar">
+        <div class="legend-item"><span class="legend-dot mildiou-dot"></span> Mildiou (Solanacées/Vigne)</div>
+        <div class="legend-item"><span class="legend-dot rouille-dot"></span> Rouille (Céréales/Légumes)</div>
+        <div class="legend-item"><span class="legend-dot ravageur-dot"></span> Ravageurs (Doryphore, Pucerons)</div>
+        <div class="legend-item"><span class="legend-dot bio-dot"></span> Auxiliaires & Pollinisateurs</div>
+        <div class="legend-item"><span class="legend-dot parcel-dot"></span> Parcelles RPG déclarées</div>
+      </div>
+    </main>
+  </div>
+
+  <!-- MODAL: REPORT AN OUTBREAK / "+ Signaler une maladie" -->
+  <div id="reportModal" class="modal-backdrop hidden">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="icon-circle warn-icon"><i data-lucide="alert-triangle"></i></div>
+          <div>
+            <h3>Signaler une observation sanitaire</h3>
+            <p>Contribuez à la veille collective des agriculteurs et jardiniers de France</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="closeReportModalBtn"><i data-lucide="x"></i></button>
+      </div>
+
+      <form id="outbreakReportForm" class="modal-body">
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="reportDiseaseType">Type de bioagresseur / maladie *</label>
+            <select id="reportDiseaseType" required>
+              <option value="mildew">🍄 Mildiou (Phytophthora infestans / Plasmopara viticola)</option>
+              <option value="rust">🍂 Rouille (Puccinia spp. / Rouille jaune & brune)</option>
+              <option value="colorado_beetle">🪲 Doryphore de la pomme de terre (Leptinotarsa)</option>
+              <option value="aphids">🦟 Pucerons colonisateurs (Aphidoidea)</option>
+              <option value="powdery_mildew">⚪ Oïdium (Erysiphe / Podosphaera)</option>
+              <option value="box_moth">🐛 Pyrale du buis / Chenilles défoliatrices</option>
+            </select>
+          </div>
+
+          <div class="form-group flex-1">
+            <label for="reportSeverity">Niveau de sévérité *</label>
+            <select id="reportSeverity" required>
+              <option value="high">🔴 Critique / Foyer actif généralisé</option>
+              <option value="medium" selected>🟡 Modéré / Premières tâches visibles</option>
+              <option value="low">🟢 Début d'attaque / Faible incidence</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="reportCropAffected">Culture touchée *</label>
+            <input type="text" id="reportCropAffected" placeholder="Ex: Tomate Coeur de Boeuf, Pomme de terre, Blé tendre..." required />
+          </div>
+
+          <div class="form-group flex-1">
+            <label for="reportUserRole">Profil de l'observateur</label>
+            <select id="reportUserRole">
+              <option value="gardener">Jardinier amateur / Permaculteur</option>
+              <option value="farmer">Agriculteur / Maraîcher professionnel</option>
+              <option value="advisor">Conseiller de Chambre d'Agriculture / Technicien</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="reportLatitude">Latitude *</label>
+            <input type="number" step="0.0001" id="reportLatitude" required />
+          </div>
+          <div class="form-group flex-1">
+            <label for="reportLongitude">Longitude *</label>
+            <input type="number" step="0.0001" id="reportLongitude" required />
+          </div>
+          <div class="form-group flex-auto align-end">
+            <button type="button" id="useMyMapLocationBtn" class="btn btn-secondary">
+              <i data-lucide="map-pin"></i> Position actuelle
+            </button>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="reportNotes">Notes de terrain & symptômes observés</label>
+          <textarea id="reportNotes" rows="3" placeholder="Description des symptômes : taches huileuses sur feuilles, feutrage blanc au revers, conditions météo récentes..."></textarea>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" id="cancelReportModalBtn">Annuler</button>
+          <button type="submit" class="btn btn-primary">
+            <i data-lucide="send"></i> Diffuser le signalement (Open Data)
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: OPEN DATA SOURCES MATRIX -->
+  <div id="sourcesModal" class="modal-backdrop hidden">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-header">
+        <div class="modal-title-wrap">
+          <div class="icon-circle db-icon"><i data-lucide="database"></i></div>
+          <div>
+            <h3>Annuaire Officiel des Sources Open Data (France)</h3>
+            <p>Flux OGC, API REST et jeux de données souverains pour l'agriculture</p>
+          </div>
+        </div>
+        <button class="close-modal-btn" id="closeSourcesModalBtn"><i data-lucide="x"></i></button>
+      </div>
+
+      <div class="modal-body scrollable-body">
+        
+        <!-- Table 1: Sols -->
+        <div class="source-category-block">
+          <h4>🌱 1. Données Sols (Pédologie, pH, Texture, Drainage)</h4>
+          <table class="sources-table">
+            <thead>
+              <tr><th>Propriété</th><th>Producteur</th><th>Format / Protocole</th><th>URL de référence</th><th>Licence</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>pH, Granulométrie, Carbone</strong></td>
+                <td>ISRIC SoilGrids 2.0</td>
+                <td>API REST (JSON instantané)</td>
+                <td><code>https://rest.isric.org/soilgrids/v2.0/properties/query</code></td>
+                <td><span class="badge-licence">CC-BY 4.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Qualité des sols (RMQS / BDAT)</strong></td>
+                <td>INRAE / GIS Sol</td>
+                <td>WMS & WFS (OGC)</td>
+                <td><code>https://agroenvgeo.data.inra.fr/geoserver/gissol_rmqs/wms</code></td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Carte des sols 1/250 000 (RRP)</strong></td>
+                <td>InfoSol INRAE</td>
+                <td>WMS Géoplateforme</td>
+                <td><code>https://data.geopf.fr/</code> via Géoportail</td>
+                <td><span class="badge-licence">Licence Ouverte</span></td>
+              </tr>
+              <tr>
+                <td><strong>Nappes phréatiques & Drainage</strong></td>
+                <td>BRGM & Hub'Eau</td>
+                <td>API REST (GeoJSON)</td>
+                <td><code>https://hubeau.eaufrance.fr/api/v1/niveaux_nappes/stations</code></td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Table 2: Biodiversite -->
+        <div class="source-category-block">
+          <h4>🐝 2. Données Biodiversité & Auxiliaires</h4>
+          <table class="sources-table">
+            <thead>
+              <tr><th>Catégorie</th><th>Producteur</th><th>Format / Protocole</th><th>URL de référence</th><th>Licence</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Oiseaux régulateurs (Aves)</strong></td>
+                <td>GBIF / MNHN INPN</td>
+                <td>API REST (JSON)</td>
+                <td><code>https://api.gbif.org/v1/occurrence/search?country=FR&taxonKey=212</code></td>
+                <td><span class="badge-licence">CC-BY 4.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Insectes & Pollinisateurs</strong></td>
+                <td>GBIF / Vigie-Nature</td>
+                <td>API REST (JSON)</td>
+                <td><code>https://api.gbif.org/v1/occurrence/search?country=FR&taxonKey=216</code></td>
+                <td><span class="badge-licence">CC-BY 4.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Suivi Photographique Pollinisateurs</strong></td>
+                <td>Spipoll (MNHN)</td>
+                <td>CSV & API sur data.gouv.fr</td>
+                <td><code>data.gouv.fr/datasets/spipoll</code></td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Inventaire National Patrimoine</strong></td>
+                <td>OpenObs (SINP / OFB)</td>
+                <td>Portail & Téléchargements</td>
+                <td><code>https://openobs.mnhn.fr</code></td>
+                <td><span class="badge-licence">Licence SINP</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Table 3: Cultures -->
+        <div class="source-category-block">
+          <h4>🌾 3. Cultures, Parcelles & Variétés</h4>
+          <table class="sources-table">
+            <thead>
+              <tr><th>Contenu</th><th>Producteur</th><th>Format / Protocole</th><th>URL de référence</th><th>Licence</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Registre Parcellaire Graphique (RPG)</strong></td>
+                <td>IGN & ASP</td>
+                <td>Flux WMS / WFS Géoplateforme</td>
+                <td><code>https://data.geopf.fr/wms-r</code> & <code>apicarto.ign.fr</code></td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Catalogue Officiel Variétés</strong></td>
+                <td>GEVES / SEMAE</td>
+                <td>Base de données ouverte</td>
+                <td><code>https://www.geves.fr</code> & <code>https://www.semae.fr</code></td>
+                <td><span class="badge-licence">Domaine Public</span></td>
+              </tr>
+              <tr>
+                <td><strong>Cadastre Agricole & Parcellaires</strong></td>
+                <td>Etalab / DGFIP</td>
+                <td>Tuiles vectorielles & GeoJSON</td>
+                <td><code>https://cadastre.data.gouv.fr</code></td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Table 4: Maladies -->
+        <div class="source-category-block">
+          <h4>🦠 4. Maladies, Ravageurs & Vigilance</h4>
+          <table class="sources-table">
+            <thead>
+              <tr><th>Ressource</th><th>Producteur</th><th>Format</th><th>Description</th><th>Licence</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><strong>Bulletins de Santé du Végétal (BSV)</strong></td>
+                <td>Chambres d'Agriculture / DRAAF</td>
+                <td>PDF & Archives data.gouv.fr</td>
+                <td>Surveillance phytosanitaire hebdomadaire par région</td>
+                <td><span class="badge-licence">Licence Ouverte</span></td>
+              </tr>
+              <tr>
+                <td><strong>Météo Haute Résolution (Risque)</strong></td>
+                <td>Météo-France Open Data</td>
+                <td>API REST (JSON)</td>
+                <td><code>https://meteo.data.gouv.fr</code> (T°, Humidité relative, Pluie)</td>
+                <td><span class="badge-licence">Licence Ouverte 2.0</span></td>
+              </tr>
+              <tr>
+                <td><strong>Référentiel des Ravageurs EPPO</strong></td>
+                <td>Organisation OEPP / EPPO</td>
+                <td>API REST</td>
+                <td><code>https://data.eppo.int</code></td>
+                <td><span class="badge-licence">Open Access</span></td>
+              </tr>
+              <tr>
+                <td><strong>Signalements Participatifs (OSM-Agri)</strong></td>
+                <td>Communauté OpenAgriMap</td>
+                <td>Base PostGIS / GeoJSON</td>
+                <td>Modèle de tags collaboratif type OSM (<code>health:active_pests</code>)</td>
+                <td><span class="badge-licence">ODbL</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" id="confirmSourcesModalBtn">Fermer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Notification Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="js/data-sources.js"></script>
+  <script src="js/mock-parcels.js"></script>
+  <script src="js/services.js"></script>
+  <script src="js/outbreak-engine.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
