@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OpenAgriMap France | OpenStreetMap pour l'Agriculture & Vigilance Écologique</title>
+  <title>OpenAgriMap Europe | OpenStreetMap pour l'Agriculture & Vigilance Écologique</title>
   <meta name="description" content="Plateforme collaborative de cartographie agricole en France : couches de sol (pH, texture), biodiversité, parcelles RPG et alertes sanitaires participatives (mildiou, rouille).">
   
   <!-- Fonts -->
@@ -33,7 +33,7 @@
         <i data-lucide="sprout"></i>
       </div>
       <div>
-        <h1 class="brand-title">OpenAgriMap <span class="badge-fr">France 🇫🇷</span></h1>
+        <h1 class="brand-title">OpenAgriMap <span class="badge-fr">Europe &#127757;</span></h1>
         <p class="brand-subtitle">Cartographie collaborative agricole & vigilance bioclimatique</p>
       </div>
     </div>
@@ -42,7 +42,7 @@
     <div class="search-bar-container">
       <div class="search-input-wrapper">
         <i data-lucide="search" class="search-icon"></i>
-        <input type="text" id="communeSearchInput" placeholder="Rechercher une commune, parcelle ou lieu (ex: Angers, Chinon, Reims)..." autocomplete="off" />
+        <input type="text" id="communeSearchInput" placeholder="Rechercher une commune, ville ou lieu (ex: Angers, Berlin, Milano, Madrid)..." autocomplete="off" />
         <button id="clearSearchBtn" class="clear-search-btn" title="Effacer"><i data-lucide="x"></i></button>
       </div>
       <div id="searchResultsDropdown" class="search-dropdown hidden"></div>
@@ -147,6 +147,21 @@
           </div>
 
           <div class="layer-sub-options" id="bioSubOptions">
+            <!-- Country selector for GBIF data streams -->
+            <div class="country-selector-row">
+              <label for="gbifCountrySelector"><i data-lucide="globe"></i> Pays / Flux GBIF :</label>
+              <select id="gbifCountrySelector" class="country-select">
+                <option value="FR" selected>🇫🇷 France</option>
+                <option value="DE">🇩🇪 Allemagne</option>
+                <option value="ES">🇪🇸 Espagne</option>
+                <option value="IT">🇮🇹 Italie</option>
+                <option value="BE">🇧🇪 Belgique</option>
+                <option value="NL">🇳🇱 Pays-Bas</option>
+                <option value="GB">🇬🇧 Royaume-Uni</option>
+                <option value="PL">🇵🇱 Pologne</option>
+              </select>
+            </div>
+            <div class="country-info-desc" id="countryInfoDesc">Données GBIF/INPN France : oiseaux, insectes et pollinisateurs.</div>
             <div class="filter-chips">
               <button class="chip active" data-bio-filter="all">Tous</button>
               <button class="chip" data-bio-filter="birds">🦅 Oiseaux</button>
@@ -230,12 +245,22 @@
           <button id="closeInspectorBtn" class="close-panel-btn"><i data-lucide="x"></i></button>
         </div>
 
+        <!-- Banner: outside France territory -->
+        <div id="soilOutsideFranceBanner" class="soil-outside-france-banner hidden">
+          <i data-lucide="lock"></i>
+          <div>
+            <strong>Sondeur indisponible hors France</strong>
+            <span>Les données pédologiques INRAE &amp; BRGM sont exclusivement disponibles sur le territoire français métropolitain. Naviguez vers la France pour utiliser cet outil.</span>
+          </div>
+        </div>
+
         <div id="inspectorLoadingState" class="inspector-loading hidden">
           <div class="spinner"></div>
           <span>Interrogation du service ISRIC SoilGrids REST API...</span>
         </div>
 
         <div id="inspectorContentState" class="inspector-body">
+          <span id="soilSourceBadge" class="soil-source-badge estimated">🟡 Estimation terroir INRAE</span>
           <div class="metrics-grid">
             <div class="metric-card">
               <span class="metric-label">pH (H₂O)</span>
@@ -576,3 +601,5 @@
   <script src="js/app.js"></script>
 </body>
 </html>
+
+

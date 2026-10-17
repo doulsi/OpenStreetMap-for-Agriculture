@@ -11,6 +11,8 @@ document.addEventListener("DOMContentLoaded", () => {
     inspectMode: false,
     selectedSoilProperty: "ph",
     bioFilter: "all",
+    selectedCountry: "FR",  // Currently selected country for GBIF data streams
+    isInsideFrance: true,   // Whether the map center is currently inside France
     diseaseFilter: {
       mildew: true,
       rust: true,
@@ -144,7 +146,8 @@ document.addEventListener("DOMContentLoaded", () => {
     clearTimeout(gbifDebounce);
     gbifDebounce = setTimeout(async () => {
       const bounds = map.getBounds();
-      const liveRecords = await Services.fetchLiveGBIFOccurrences(bounds, state.bioFilter);
+      const countryCode = state.selectedCountry || "FR";
+      const liveRecords = await Services.fetchLiveGBIFOccurrences(bounds, state.bioFilter, countryCode);
       liveRecords.forEach(pt => addBioMarker(pt));
     }, 350);
   }
@@ -338,13 +341,48 @@ document.addEventListener("DOMContentLoaded", () => {
   const soilInspectorPanel = document.getElementById("soilInspectorPanel");
   const inspectModeToggleBtn = document.getElementById("liveInspectSoilToggle");
   const inspectModeLabel = document.getElementById("inspectModeLabel");
+  const soilOutsideFranceBanner = document.getElementById("soilOutsideFranceBanner");
+
+  /**
+   * Updates soil inspector button availability based on map center position.
+   * The full soil inspector (INRAE/BRGM data) is only available inside France.
+   */
+  function updateSoilInspectorAvailability(lat, lng) {
+    const inside = Services.isInsideFrance(lat, lng);
+    state.isInsideFrance = inside;
+
+    if (!inside) {
+      // Disable the toggle button and deactivate inspect mode if active
+      inspectModeToggleBtn.classList.add("soil-btn-disabled");
+      inspectModeToggleBtn.setAttribute("title", "Sondeur de sol disponible uniquement sur le territoire fran\u00e7ais");
+      if (state.inspectMode) {
+        state.inspectMode = false;
+        inspectModeToggleBtn.classList.remove("active");
+        soilInspectorPanel.classList.add("hidden");
+      }
+      inspectModeLabel.textContent = "Sondeur de Sol : Hors France";
+      if (soilOutsideFranceBanner) soilOutsideFranceBanner.classList.remove("hidden");
+    } else {
+      inspectModeToggleBtn.classList.remove("soil-btn-disabled");
+      inspectModeToggleBtn.setAttribute("title", "Cliquer sur la carte pour sonder le sol via SoilGrids API");
+      if (!state.inspectMode) {
+        inspectModeLabel.textContent = "Sondeur de Sol : OFF";
+      }
+      if (soilOutsideFranceBanner) soilOutsideFranceBanner.classList.add("hidden");
+    }
+  }
 
   inspectModeToggleBtn.addEventListener("click", () => {
+    // Block activation outside France
+    if (!state.isInsideFrance) {
+      showToast("\u26a0\ufe0f Le Sondeur de Sol est disponible uniquement sur le territoire fran\u00e7ais m\u00e9tropolitain (donn\u00e9es INRAE / BRGM).", "warning");
+      return;
+    }
     state.inspectMode = !state.inspectMode;
     if (state.inspectMode) {
       inspectModeToggleBtn.classList.add("active");
       inspectModeLabel.textContent = "Sondeur de Sol : ACTIF (Cliquez sur la carte)";
-      showToast("Mode Sondeur ACTIF : Cliquez n'importe où sur la carte pour interroger l'API SoilGrids.", "info");
+      showToast("Mode Sondeur ACTIF : Cliquez n'importe o\u00f9 sur la carte pour interroger l'API SoilGrids.", "info");
     } else {
       inspectModeToggleBtn.classList.remove("active");
       inspectModeLabel.textContent = "Sondeur de Sol : OFF";
@@ -361,6 +399,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const { lat, lng } = e.latlng;
 
     if (state.inspectMode) {
+      // Double-check France territory at click point
+      if (!Services.isInsideFrance(lat, lng)) {
+        showToast("\u26a0\ufe0f Ce point est hors du territoire fran\u00e7ais. Le sondeur de sol INRAE/BRGM n'est pas disponible ici.", "warning");
+        return;
+      }
       // Open Soil Inspector
       soilInspectorPanel.classList.remove("hidden");
       document.getElementById("inspectorCoordsLabel").textContent = `Lat: ${lat.toFixed(4)}, Lon: ${lng.toFixed(4)}`;
@@ -372,6 +415,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       document.getElementById("inspectorLoadingState").classList.add("hidden");
       document.getElementById("inspectorContentState").classList.remove("hidden");
+
+      // Show source badge
+      const sourceBadgeEl = document.getElementById("soilSourceBadge");
+      if (sourceBadgeEl) {
+        sourceBadgeEl.textContent = soilData.isLiveApi ? "\ud83d\udfe2 ISRIC SoilGrids LIVE" : "\ud83d\udfe1 Estimation terroir INRAE";
+        sourceBadgeEl.className = soilData.isLiveApi ? "soil-source-badge live" : "soil-source-badge estimated";
+      }
 
       // Populate UI
       document.getElementById("soilPhVal").textContent = soilData.ph;
@@ -447,6 +497,8 @@ document.addEventListener("DOMContentLoaded", () => {
     mapMoveTimeout = setTimeout(() => {
       const c = map.getCenter();
       outbreakEngine.setCenter(c.lat, c.lng);
+      // Check if map center is still inside France for soil inspector
+      updateSoilInspectorAvailability(c.lat, c.lng);
       if (document.getElementById("toggleBioLayer").checked) {
         renderBiodiversityLayer();
       }
@@ -503,6 +555,25 @@ document.addEventListener("DOMContentLoaded", () => {
       tileLayers[target].addTo(map);
     });
   });
+
+  // Country Selector for GBIF Data Streams
+  const countrySelector = document.getElementById("gbifCountrySelector");
+  if (countrySelector) {
+    countrySelector.addEventListener("change", (e) => {
+      state.selectedCountry = e.target.value;
+      const profile = COUNTRY_PROFILES[state.selectedCountry];
+      const profileName = profile ? profile.name : state.selectedCountry;
+      showToast(`🌍 Flux de données GBIF basculé sur : ${profileName}`, "info");
+      if (document.getElementById("toggleBioLayer").checked) {
+        renderBiodiversityLayer();
+      }
+      // Update country info banner
+      const countryInfoEl = document.getElementById("countryInfoDesc");
+      if (countryInfoEl && profile) {
+        countryInfoEl.textContent = profile.description;
+      }
+    });
+  }
 
   // 9. MODALS: REPORT OUTBREAK & OPEN DATA SOURCES
   const reportModal = document.getElementById("reportModal");
@@ -579,6 +650,8 @@ document.addEventListener("DOMContentLoaded", () => {
   renderBiodiversityLayer();
   renderCropLayer();
   outbreakEngine.notify();
+  // Initial soil inspector availability check
+  updateSoilInspectorAvailability(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng);
 
-  console.log("OpenAgriMap France initialized successfully.");
+  console.log("OpenAgriMap Multi-Country initialized successfully.");
 });

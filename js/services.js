@@ -1,29 +1,154 @@
 /**
  * OpenAgriMap France - API Services & Scientific Algorithms
+ * Supports multi-country data streams + France-only soil restriction
  */
+
+// --------------------------------------------------------------------------
+// COUNTRY DEFINITIONS (boundaries + data sources)
+// --------------------------------------------------------------------------
+const COUNTRY_PROFILES = {
+  FR: {
+    name: "France 🇫🇷",
+    gbifCode: "FR",
+    hasSoilInspector: true,
+    // Approximate bounding box of metropolitan France (plus Corsica)
+    bbox: { minLat: 41.3, maxLat: 51.2, minLng: -5.2, maxLng: 9.7 },
+    soilSource: "ISRIC SoilGrids + INRAE terroir",
+    description: "Données pédologiques complètes (ISRIC, INRAE, BRGM). Sondeur de sol pleinement opérationnel."
+  },
+  DE: {
+    name: "Allemagne 🇩🇪",
+    gbifCode: "DE",
+    hasSoilInspector: false,
+    bbox: { minLat: 47.3, maxLat: 55.1, minLng: 6.0, maxLng: 15.1 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  ES: {
+    name: "Espagne 🇪🇸",
+    gbifCode: "ES",
+    hasSoilInspector: false,
+    bbox: { minLat: 35.9, maxLat: 43.8, minLng: -9.4, maxLng: 4.4 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  IT: {
+    name: "Italie 🇮🇹",
+    gbifCode: "IT",
+    hasSoilInspector: false,
+    bbox: { minLat: 36.5, maxLat: 47.1, minLng: 6.6, maxLng: 18.6 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  BE: {
+    name: "Belgique 🇧🇪",
+    gbifCode: "BE",
+    hasSoilInspector: false,
+    bbox: { minLat: 49.5, maxLat: 51.5, minLng: 2.5, maxLng: 6.4 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  NL: {
+    name: "Pays-Bas 🇳🇱",
+    gbifCode: "NL",
+    hasSoilInspector: false,
+    bbox: { minLat: 50.7, maxLat: 53.6, minLng: 3.3, maxLng: 7.2 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  GB: {
+    name: "Royaume-Uni 🇬🇧",
+    gbifCode: "GB",
+    hasSoilInspector: false,
+    bbox: { minLat: 49.9, maxLat: 60.9, minLng: -8.2, maxLng: 2.1 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  },
+  PL: {
+    name: "Pologne 🇵🇱",
+    gbifCode: "PL",
+    hasSoilInspector: false,
+    bbox: { minLat: 49.0, maxLat: 54.9, minLng: 14.1, maxLng: 24.2 },
+    soilSource: "ISRIC SoilGrids uniquement",
+    description: "Données GBIF/biodiversité disponibles. Sondeur de sol limité (données ISRIC 250m)."
+  }
+};
+
 
 const Services = {
 
   /**
+   * Determine if a lat/lon is inside metropolitan France (approximate bounding box + coastline filter)
+   * Returns true only for metropolitan France territory
+   */
+  isInsideFrance(lat, lon) {
+    const bbox = COUNTRY_PROFILES.FR.bbox;
+    if (lat < bbox.minLat || lat > bbox.maxLat || lon < bbox.minLng || lon > bbox.maxLng) {
+      return false;
+    }
+    // Additional exclusion: Gulf of Biscay / Mediterranean Sea rough filter
+    // Simple polygon-based check for a rough France outline
+    // Exclude clearly maritime zones (rough check)
+    if (lat < 43.5 && lon > 8.5) return true; // Corsica
+    if (lat < 43.3 && lon < -1.8) return false; // Atlantic ocean
+    return true;
+  },
+
+  /**
+   * Detect country code from lat/lon using COUNTRY_PROFILES bounding boxes
+   */
+  detectCountryFromCoords(lat, lon) {
+    if (this.isInsideFrance(lat, lon)) return 'FR';
+    for (const [code, profile] of Object.entries(COUNTRY_PROFILES)) {
+      if (code === 'FR') continue;
+      const { minLat, maxLat, minLng, maxLng } = profile.bbox;
+      if (lat >= minLat && lat <= maxLat && lon >= minLng && lon <= maxLng) {
+        return code;
+      }
+    }
+    return null; // Unknown / not covered
+  },
+
+  /**
    * Search French communes, addresses or places via official IGN Geoplateforme Geocoding API
+   * Falls back to Nominatim for non-French locations
    */
   async searchCommune(query) {
     if (!query || query.trim().length < 2) return [];
+    // Try IGN first (optimized for France)
     try {
-      const url = `https://data.geopf.fr/geocodage/search?q=${encodeURIComponent(query)}&limit=5`;
+      const url = `https://data.geopf.fr/geocodage/search?q=${encodeURIComponent(query)}&limit=4`;
       const response = await fetch(url);
       if (!response.ok) throw new Error("Erreur service géocodage");
       const data = await response.json();
-      return (data.features || []).map(f => ({
+      const ignResults = (data.features || []).map(f => ({
         label: f.properties.label || f.properties.name,
         city: f.properties.city || f.properties.name,
         postcode: f.properties.postcode || "",
-        context: f.properties.context || "",
+        context: f.properties.context || "France",
         lat: f.geometry.coordinates[1],
         lng: f.geometry.coordinates[0]
       }));
+      if (ignResults.length > 0) return ignResults;
     } catch (err) {
-      console.warn("Geocodage IGN API fallback:", err);
+      console.warn("Geocodage IGN API:", err);
+    }
+    // Fallback: Nominatim OpenStreetMap (world-wide)
+    try {
+      const nomUrl = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=5&addressdetails=1`;
+      const res = await fetch(nomUrl, { headers: { 'Accept-Language': 'fr' } });
+      if (!res.ok) throw new Error("Nominatim error");
+      const items = await res.json();
+      return items.map(item => ({
+        label: item.display_name,
+        city: item.address?.city || item.address?.town || item.address?.village || item.name,
+        postcode: item.address?.postcode || "",
+        context: item.address?.country || "",
+        lat: parseFloat(item.lat),
+        lng: parseFloat(item.lon)
+      }));
+    } catch (err) {
+      console.warn("Nominatim fallback:", err);
       return [];
     }
   },
@@ -65,9 +190,13 @@ const Services = {
         });
       }
 
-      // If outside data mask or null, calculate realistic localized estimation based on French Terroir
+      // If outside data mask or null, use localized estimation
       if (ph === null || clay === null) {
-        return this.estimateFrenchTerroirSoil(lat, lon);
+        const countryCode = this.detectCountryFromCoords(lat, lon);
+        if (countryCode === 'FR') {
+          return this.estimateFrenchTerroirSoil(lat, lon);
+        }
+        return this.estimateGenericSoil(lat, lon, countryCode);
       }
 
       // Normalize percentages to sum to 100%
@@ -95,8 +224,12 @@ const Services = {
       };
 
     } catch (err) {
-      console.info("Using localized terroir pedology estimation:", err.message);
-      return this.estimateFrenchTerroirSoil(lat, lon);
+      console.info("Using localized pedology estimation:", err.message);
+      const countryCode = this.detectCountryFromCoords(lat, lon);
+      if (countryCode === 'FR') {
+        return this.estimateFrenchTerroirSoil(lat, lon);
+      }
+      return this.estimateGenericSoil(lat, lon, countryCode);
     }
   },
 
@@ -174,15 +307,50 @@ const Services = {
   },
 
   /**
-   * Fetch Live Biodiversity Occurrences from GBIF REST API for France
+   * Generic soil estimator for non-French locations (ISRIC global fallback)
+   */
+  estimateGenericSoil(lat, lon, countryCode) {
+    const pseudoRand = Math.abs(Math.sin(lat * 12.9898 + lon * 78.233));
+    const ph = parseFloat((5.8 + pseudoRand * 2.0).toFixed(1));
+    const clay = Math.round(15 + pseudoRand * 25);
+    const sand = Math.round(20 + (1 - pseudoRand) * 35);
+    const silt = 100 - clay - sand;
+    const textureInfo = this.classifyTexture(clay, silt, sand);
+    const drainageInfo = this.estimateDrainage(clay, sand);
+    const profile = countryCode ? COUNTRY_PROFILES[countryCode] : null;
+    const sourceName = profile ? profile.soilSource : "ISRIC SoilGrids (estimation)";
+    return {
+      isLiveApi: false,
+      isEstimation: true,
+      countryCode,
+      sourceName,
+      ph,
+      clayPct: clay,
+      sandPct: sand,
+      siltPct: silt,
+      textureClass: textureInfo.name,
+      textureAdvice: textureInfo.desc,
+      drainageClass: drainageInfo.name,
+      drainageDesc: drainageInfo.desc,
+      recommendation: this.getAgronomicRecommendation(ph, textureInfo.name)
+    };
+  },
+
+  /**
+   * Fetch Live Biodiversity Occurrences from GBIF REST API
    * Query bounds: decimalLatitude=minLat,maxLat & decimalLongitude=minLng,maxLng
    */
-  async fetchLiveGBIFOccurrences(bounds, category = "all") {
+  async fetchLiveGBIFOccurrences(bounds, category = "all", countryCode = "FR") {
     try {
-      const minLat = Math.max(41.3, bounds.getSouth()).toFixed(3);
-      const maxLat = Math.min(51.1, bounds.getNorth()).toFixed(3);
-      const minLng = Math.max(-5.2, bounds.getWest()).toFixed(3);
-      const maxLng = Math.min(9.6, bounds.getEast()).toFixed(3);
+      const south = bounds.getSouth();
+      const north = bounds.getNorth();
+      const west = bounds.getWest();
+      const east = bounds.getEast();
+
+      const minLat = south.toFixed(3);
+      const maxLat = north.toFixed(3);
+      const minLng = west.toFixed(3);
+      const maxLng = east.toFixed(3);
 
       let taxonParam = "";
       if (category === "birds") {
@@ -193,7 +361,8 @@ const Services = {
         taxonParam = "&taxonKey=216"; // Insecta
       }
 
-      const url = `https://api.gbif.org/v1/occurrence/search?country=FR&hasCoordinate=true&decimalLatitude=${minLat},${maxLat}&decimalLongitude=${minLng},${maxLng}${taxonParam}&limit=40`;
+      const countryParam = countryCode ? `&country=${countryCode}` : "";
+      const url = `https://api.gbif.org/v1/occurrence/search${countryParam}&hasCoordinate=true&decimalLatitude=${minLat},${maxLat}&decimalLongitude=${minLng},${maxLng}${taxonParam}&limit=40`;
       
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -227,10 +396,11 @@ const Services = {
           family: r.family || "",
           role: role,
           date: r.eventDate ? r.eventDate.split("T")[0] : "Observation récente",
-          observer: r.datasetName || (r.institutionCode ? `Muséum / ${r.institutionCode}` : "Inventaire National SINP / GBIF"),
+          observer: r.datasetName || (r.institutionCode ? `Institut / ${r.institutionCode}` : `Inventaire National GBIF (${countryCode})`),
           lat: r.decimalLatitude,
           lng: r.decimalLongitude,
-          status: "Observation géoréférencée validée MNHN / GBIF",
+          country: r.countryCode || countryCode,
+          status: `Observation géoréférencée validée GBIF (${r.countryCode || countryCode})`,
           isLive: true
         };
       });
