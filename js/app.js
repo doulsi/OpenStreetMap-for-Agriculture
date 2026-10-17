@@ -60,7 +60,24 @@ document.addEventListener("DOMContentLoaded", () => {
   const soilLayerGroup = L.layerGroup().addTo(map);
   const bioLayerGroup = L.layerGroup().addTo(map);
   const cropLayerGroup = L.layerGroup().addTo(map);
-  const diseaseLayerGroup = L.layerGroup().addTo(map);
+  const waterLayerGroup = L.layerGroup().addTo(map);
+  const diseaseLayerGroup = (window.L && typeof L.markerClusterGroup === 'function') ? L.markerClusterGroup({
+    maxClusterRadius: 42,
+    spiderfyOnMaxZoom: true,
+    showCoverageOnHover: false,
+    zoomToBoundsOnClick: true,
+    iconCreateFunction: function(cluster) {
+      const count = cluster.getChildCount();
+      let sizeClass = 'small';
+      if (count > 25) sizeClass = 'large';
+      else if (count > 10) sizeClass = 'medium';
+      return L.divIcon({
+        html: `<div class="agri-cluster-badge ${sizeClass}"><span>${count}</span></div>`,
+        className: 'custom-cluster-icon',
+        iconSize: L.point(42, 42)
+      });
+    }
+  }).addTo(map) : L.layerGroup().addTo(map);
   let radiusCircleLayer = null;
 
   // 2. RENDER THE 30KM SURVEILLANCE RADIUS CIRCLE
@@ -214,7 +231,59 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // LAYER 4: Disease & Pest Outbreaks (The Crowdsourced Alert Engine)
+  // LAYER 4: Soil Water Status & Moisture Stations (Open-Meteo / Hub'Eau)
+  function renderWaterLayer() {
+    waterLayerGroup.clearLayers();
+    const toggle = document.getElementById("toggleWaterLayer");
+    if (toggle && !toggle.checked) return;
+
+    if (window.SOIL_WATER_STATIONS) {
+      SOIL_WATER_STATIONS.forEach(station => {
+        let badgeColor = "#10b981";
+        if (station.status === "drought") badgeColor = "#ef4444";
+        else if (station.status === "deficit") badgeColor = "#f59e0b";
+        else if (station.status === "saturated") badgeColor = "#3b82f6";
+
+        const icon = L.divIcon({
+          className: 'custom-div-icon',
+          html: `<div class="water-station-marker" style="border-color:${badgeColor}; box-shadow:0 0 10px ${badgeColor}66;">💧</div>`,
+          iconSize: [32, 32],
+          iconAnchor: [16, 16]
+        });
+
+        const marker = L.marker([station.lat, station.lng], { icon: icon });
+
+        marker.bindPopup(`
+          <div class="map-popup">
+            <div class="popup-tag" style="background:${badgeColor}22; color:${badgeColor}; border:1px solid ${badgeColor}44;">
+              STATUT HYDRIQUE DES SOLS • OPEN-METEO
+            </div>
+            <h4>${station.name}</h4>
+            <div style="margin: 6px 0; font-size: 0.8rem; font-weight:700; color:${badgeColor};">
+              ● ${station.statusLabel}
+            </div>
+            <div class="popup-metrics" style="grid-template-columns: 1fr 1fr; gap:6px; margin: 8px 0;">
+              <div style="background:rgba(15,23,42,0.6); padding:6px 8px; border-radius:4px;">
+                <span style="font-size:0.7rem; color:#94a3b8;">Surface (0-3cm):</span><br>
+                <strong style="color:#38bdf8; font-size:0.95rem;">${station.surfaceMoisture}%</strong>
+              </div>
+              <div style="background:rgba(15,23,42,0.6); padding:6px 8px; border-radius:4px;">
+                <span style="font-size:0.7rem; color:#94a3b8;">Racines (15-30cm):</span><br>
+                <strong style="color:#38bdf8; font-size:0.95rem;">${station.rootMoisture}%</strong>
+              </div>
+            </div>
+            <div style="font-size:0.75rem; color:#cbd5e1; margin-top:6px;">
+              <strong>Température sol :</strong> ${station.soilTemp}°C • Bilan hydrique calculé en continu
+            </div>
+          </div>
+        `);
+
+        waterLayerGroup.addLayer(marker);
+      });
+    }
+  }
+
+  // LAYER 5: Disease & Pest Outbreaks (The Crowdsourced Alert Engine)
   function renderDiseaseLayer(summary) {
     diseaseLayerGroup.clearLayers();
     if (!document.getElementById("toggleDiseaseLayer").checked) return;
@@ -399,49 +468,153 @@ document.addEventListener("DOMContentLoaded", () => {
     const { lat, lng } = e.latlng;
 
     if (state.inspectMode) {
-      // Double-check France territory at click point
-      if (!Services.isInsideFrance(lat, lng)) {
-        showToast("\u26a0\ufe0f Ce point est hors du territoire fran\u00e7ais. Le sondeur de sol INRAE/BRGM n'est pas disponible ici.", "warning");
-        return;
-      }
-      // Open Soil Inspector
       soilInspectorPanel.classList.remove("hidden");
       document.getElementById("inspectorCoordsLabel").textContent = `Lat: ${lat.toFixed(4)}, Lon: ${lng.toFixed(4)}`;
-      document.getElementById("inspectorLoadingState").classList.remove("hidden");
-      document.getElementById("inspectorContentState").classList.add("hidden");
 
-      // Query live API service
-      const soilData = await Services.querySoilProperties(lat, lng);
+      const loadingEl = document.getElementById("inspectorLoadingState");
+      const contentEl = document.getElementById("inspectorContentState");
+      const noDataEl = document.getElementById("inspectorNoDataState");
+      const outsideBanner = document.getElementById("soilOutsideFranceBanner");
 
-      document.getElementById("inspectorLoadingState").classList.add("hidden");
-      document.getElementById("inspectorContentState").classList.remove("hidden");
+      // 1. Guardrail against Ocean / Sea coordinates
+      if (Services.isMaritimeOrOcean(lat, lng)) {
+        loadingEl.classList.add("hidden");
+        contentEl.classList.add("hidden");
+        outsideBanner.classList.add("hidden");
+        noDataEl.classList.remove("hidden");
 
-      // Show source badge
-      const sourceBadgeEl = document.getElementById("soilSourceBadge");
-      if (sourceBadgeEl) {
-        sourceBadgeEl.textContent = soilData.isLiveApi ? "\ud83d\udfe2 ISRIC SoilGrids LIVE" : "\ud83d\udfe1 Estimation terroir INRAE";
-        sourceBadgeEl.className = soilData.isLiveApi ? "soil-source-badge live" : "soil-source-badge estimated";
+        const iconWrap = document.getElementById("inspectorNoDataIconWrap");
+        const badge = document.getElementById("inspectorNoDataBadge");
+        const title = document.getElementById("inspectorNoDataTitle");
+        const desc = document.getElementById("inspectorNoDataDesc");
+        const hint = document.getElementById("inspectorNoDataHint");
+        const icon = document.getElementById("inspectorNoDataIcon");
+
+        if (iconWrap) iconWrap.className = "nodata-icon-wrap ocean";
+        if (badge) {
+          badge.className = "soil-source-badge ocean";
+          badge.textContent = "🌊 Milieu marin / Océan";
+        }
+        if (title) title.textContent = "Zone maritime non couverte";
+        if (desc) desc.textContent = "Le point sélectionné se situe en mer ou dans l'océan. Le sondeur pédologique ne s'applique qu'aux terres émergées et sols agricoles répertoriés.";
+        if (hint) hint.textContent = "Naviguez vers une terre émergée ou une parcelle agricole pour utiliser le sondeur de sol.";
+        if (icon) icon.setAttribute("data-lucide", "waves");
+
+        if (window.lucide) lucide.createIcons();
+        showToast("🌊 Océan / Mer : aucune donnée de sol n'existe en milieu marin.", "warning");
+        return;
       }
 
-      // Populate UI
-      document.getElementById("soilPhVal").textContent = soilData.ph;
-      document.getElementById("soilPhStatus").textContent = soilData.ph < 6.5 ? "Acide" : (soilData.ph > 7.5 ? "Calcaire" : "Neutre");
+      // 2. Guardrail: Check European terrestrial territory
+      if (!Services.isInsideEurope(lat, lng)) {
+        loadingEl.classList.add("hidden");
+        contentEl.classList.add("hidden");
+        noDataEl.classList.add("hidden");
+        outsideBanner.classList.remove("hidden");
+        showToast("⚠️ Le sondeur pédologique et hydrique est actif sur les terres européennes.", "warning");
+        return;
+      }
+
+      // 3. Location is on land: prepare UI & query live service
+      outsideBanner.classList.add("hidden");
+      noDataEl.classList.add("hidden");
+      contentEl.classList.add("hidden");
+      loadingEl.classList.remove("hidden");
+
+      // Query live API service (ISRIC SoilGrids + Open-Meteo soil moisture)
+      const soilData = await Services.querySoilProperties(lat, lng);
+
+      loadingEl.classList.add("hidden");
+
+      // 4. Guardrail: ensure data is KNOWN!
+      if (!soilData || !soilData.hasData) {
+        contentEl.classList.add("hidden");
+        noDataEl.classList.remove("hidden");
+
+        const iconWrap = document.getElementById("inspectorNoDataIconWrap");
+        const badge = document.getElementById("inspectorNoDataBadge");
+        const title = document.getElementById("inspectorNoDataTitle");
+        const desc = document.getElementById("inspectorNoDataDesc");
+        const hint = document.getElementById("inspectorNoDataHint");
+        const icon = document.getElementById("inspectorNoDataIcon");
+
+        if (iconWrap) iconWrap.className = "nodata-icon-wrap nodata";
+        if (badge) {
+          badge.className = "soil-source-badge nodata";
+          badge.textContent = "🚫 Données inconnues";
+        }
+        if (title) title.textContent = "Mesures non disponibles";
+        if (desc) desc.textContent = soilData?.reason || "Données de sol non répertoriées pour ce point précis (plan d'eau, surface rocheuse ou absence de relevés). Le sondeur ne restitue que les mesures certifiées.";
+        if (hint) hint.textContent = "Sélectionnez une autre parcelle ou terre agricole pour interroger l'API ISRIC.";
+        if (icon) icon.setAttribute("data-lucide", "alert-circle");
+
+        if (window.lucide) lucide.createIcons();
+        showToast("⚠️ Données de sol inconnues pour ces coordonnées.", "warning");
+        return;
+      }
+
+      // 5. Data is known: populate verified measurements
+      contentEl.classList.remove("hidden");
+      noDataEl.classList.add("hidden");
+
+      // Show source badge with country context
+      const sourceBadgeEl = document.getElementById("soilSourceBadge");
+      if (sourceBadgeEl) {
+        const countryLabel = soilData.countryCode ? `${soilData.countryCode}` : 'Europe';
+        sourceBadgeEl.textContent = `🟢 ISRIC SoilGrids 2.0 & Open-Meteo (${countryLabel})`;
+        sourceBadgeEl.className = "soil-source-badge live";
+      }
+
+      // Populate UI with verified soil data
+      document.getElementById("soilPhVal").textContent = soilData.ph !== null ? soilData.ph : "--";
+      document.getElementById("soilPhStatus").textContent = soilData.ph !== null ? (soilData.ph < 6.5 ? "Acide" : (soilData.ph > 7.5 ? "Calcaire" : "Neutre")) : "Non mesuré";
       document.getElementById("soilTextureVal").textContent = soilData.textureClass;
       document.getElementById("soilTextureDetail").textContent = soilData.textureAdvice;
       document.getElementById("soilDrainageVal").textContent = soilData.drainageClass;
       document.getElementById("soilDrainageDetail").textContent = soilData.drainageDesc;
 
-      document.getElementById("clayPct").textContent = `${soilData.clayPct}%`;
-      document.getElementById("siltPct").textContent = `${soilData.siltPct}%`;
-      document.getElementById("sandPct").textContent = `${soilData.sandPct}%`;
+      const granuloBox = document.getElementById("soilGranuloBox");
+      if (soilData.hasSoilTexture) {
+        if (granuloBox) granuloBox.style.display = "block";
+        document.getElementById("clayPct").textContent = `${soilData.clayPct}%`;
+        document.getElementById("siltPct").textContent = `${soilData.siltPct}%`;
+        document.getElementById("sandPct").textContent = `${soilData.sandPct}%`;
 
-      document.getElementById("clayBar").style.width = `${soilData.clayPct}%`;
-      document.getElementById("siltBar").style.width = `${soilData.siltPct}%`;
-      document.getElementById("sandBar").style.width = `${soilData.sandPct}%`;
+        document.getElementById("clayBar").style.width = `${soilData.clayPct}%`;
+        document.getElementById("siltBar").style.width = `${soilData.siltPct}%`;
+        document.getElementById("sandBar").style.width = `${soilData.sandPct}%`;
+      } else {
+        if (granuloBox) granuloBox.style.display = "none";
+      }
+
+      // Populate Live Water Status Section
+      if (soilData.waterStatus) {
+        const ws = soilData.waterStatus;
+        const sVal = document.getElementById("soilWaterSurfaceVal");
+        const rVal = document.getElementById("soilWaterRootVal");
+        const tVal = document.getElementById("soilTempVal");
+        const wBadge = document.getElementById("soilWaterStatusBadge");
+        const wBar = document.getElementById("soilWaterBar");
+        const wDiag = document.getElementById("soilWaterDiagText");
+
+        if (sVal) sVal.textContent = `${ws.surfaceMoisturePct}%`;
+        if (rVal) rVal.textContent = `${ws.rootMoisturePct}%`;
+        if (tVal) tVal.textContent = `${ws.soilTemp}°C`;
+        if (wBadge) {
+          wBadge.className = `soil-water-badge ${ws.statusBadgeClass}`;
+          wBadge.textContent = `💧 ${ws.statusLabel}`;
+        }
+        if (wBar) {
+          wBar.style.width = `${ws.barWidth}%`;
+          wBar.style.background = `linear-gradient(90deg, ${ws.statusColor}, #0284c7)`;
+        }
+        if (wDiag) wDiag.textContent = ws.diagnostic;
+      }
 
       document.getElementById("soilRecText").textContent = soilData.recommendation;
 
       if (window.lucide) lucide.createIcons();
+      showToast(`Sol analysé : ${soilData.textureClass} • Statut hydrique : ${soilData.waterStatus?.statusLabel || 'Mesuré'}`, "success");
     }
   });
 
@@ -518,6 +691,8 @@ document.addEventListener("DOMContentLoaded", () => {
   // 8. LAYER TOGGLES & RADIO CONTROLS
   document.getElementById("toggleBioLayer").addEventListener("change", renderBiodiversityLayer);
   document.getElementById("toggleCropLayer").addEventListener("change", renderCropLayer);
+  const toggleWater = document.getElementById("toggleWaterLayer");
+  if (toggleWater) toggleWater.addEventListener("change", renderWaterLayer);
   document.getElementById("toggleDiseaseLayer").addEventListener("change", () => {
     outbreakEngine.notify();
   });
@@ -649,6 +824,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Initial trigger to populate everything
   renderBiodiversityLayer();
   renderCropLayer();
+  renderWaterLayer();
   outbreakEngine.notify();
   // Initial soil inspector availability check
   updateSoilInspectorAvailability(DEFAULT_CENTER.lat, DEFAULT_CENTER.lng);
