@@ -34,26 +34,6 @@ Plateforme cartographique collaborative et ouverte dédiée au monde agricole et
 
 ---
 
-## 🚀 Démarrage Rapide
-
-### Prérequis
-Aucune installation complexe n'est requise. Le projet utilise des technologies web natives (HTML5, Vanilla CSS, Vanilla JavaScript, Leaflet, Turf.js).
-
-### Lancer l'application
-Ouvrez un terminal dans le répertoire du projet et lancez un serveur local HTTP :
-
-```bash
-# Avec Python :
-python -m http.server 8085
-
-# Ou avec Node.js :
-npx serve -l 8085 .
-```
-
-Puis ouvrez votre navigateur sur : **[http://localhost:8085](http://localhost:8085)**
-
----
-
 ## 📂 Structure du Projet
 
 ```text
